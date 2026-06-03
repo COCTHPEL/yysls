@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>yysls · 映像集 (2002张)</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -50,32 +50,71 @@ header input::placeholder { color:#555; }
     font-size:.7rem; color:#aaa;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
+/* Lightbox with zoom */
 .lightbox {
     display:none; position:fixed; inset:0;
     background:rgba(0,0,0,.95); z-index:999;
-    justify-content:center; align-items:center; flex-direction:column;
+    overflow:hidden;
 }
-.lightbox.active { display:flex; }
-.lightbox img {
-    max-width:95vw; max-height:88vh;
-    border-radius:4px; box-shadow:0 8px 40px rgba(0,0,0,.6);
-}
-.lightbox .close, .lightbox .nav {
-    position:absolute; color:#fff; cursor:pointer;
-    background:rgba(255,255,255,.08); border:none;
-    border-radius:50%; width:44px; height:44px;
-    font-size:1.3rem;
+.lightbox.active { display:block; }
+.lightbox .img-wrap {
+    width:100%; height:100%;
     display:flex; align-items:center; justify-content:center;
-    transition:background .2s;
+    overflow:hidden;
 }
-.lightbox .close:hover, .lightbox .nav:hover { background:rgba(255,255,255,.2); }
-.lightbox .close { top:20px; right:24px; }
-.lightbox .nav.prev { left:16px; top:50%; transform:translateY(-50%); }
-.lightbox .nav.next { right:16px; top:50%; transform:translateY(-50%); }
-.lightbox .info { margin-top:10px; color:#888; font-size:.85rem; }
+.lightbox .lb-img {
+    display:block;
+    cursor:grab;
+    transition: transform .05s ease-out;
+    transform-origin:center center;
+    user-select:none;
+    -webkit-user-drag:none;
+}
+.lightbox .lb-img.dragging { cursor:grabbing; transition:none; }
+.lightbox .lb-top {
+    position:absolute; top:12px; left:0; right:0;
+    display:flex; justify-content:center; align-items:center;
+    gap:10px; pointer-events:none; z-index:10;
+}
+.lightbox .lb-top * { pointer-events:auto; }
+.lightbox .btn {
+    color:#fff; cursor:pointer;
+    background:rgba(255,255,255,.08); border:none;
+    border-radius:8px; padding:8px 14px;
+    font-size:.85rem; display:flex; align-items:center; justify-content:center;
+    transition:background .2s;
+    backdrop-filter:blur(4px);
+}
+.lightbox .btn:hover { background:rgba(255,255,255,.2); }
+.lightbox .btn-icon {
+    width:40px; height:40px; border-radius:50%; padding:0;
+    font-size:1.2rem; font-weight:300;
+}
+.lightbox .lb-close { position:absolute; top:16px; right:20px; z-index:11; }
+.lightbox .lb-nav { position:absolute; top:50%; transform:translateY(-50%); z-index:11; }
+.lightbox .lb-nav.prev { left:16px; }
+.lightbox .lb-nav.next { right:16px; }
+.lightbox .lb-info {
+    position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+    color:#888; font-size:.8rem;
+    background:rgba(0,0,0,.6); padding:6px 16px; border-radius:20px;
+    z-index:11;
+}
+.lightbox .zoom-label {
+    position:absolute; top:70px; left:50%; transform:translateX(-50%);
+    color:#fff; font-size:.85rem;
+    background:rgba(0,0,0,.7); padding:5px 14px; border-radius:14px;
+    opacity:0; transition:opacity .3s;
+    z-index:11; pointer-events:none;
+}
+.lightbox .zoom-label.show { opacity:1; }
 .empty { text-align:center; padding:80px 20px; color:#555; font-size:1.1rem; }
 .empty.hidden { display:none; }
 #progress { text-align:center; padding:8px; color:#444; font-size:.75rem; }
+/* Scrollbar */
+::-webkit-scrollbar { width:6px; }
+::-webkit-scrollbar-track { background:#0a0a0a; }
+::-webkit-scrollbar-thumb { background:#2a2a2a; border-radius:3px; }
 </style>
 </head>
 <body>
@@ -92,11 +131,19 @@ header input::placeholder { color:#555; }
 <div id="progress"></div>
 
 <div class="lightbox" id="lightbox">
-    <button class="close" onclick="closeLB()">&#10005;</button>
-    <button class="nav prev" onclick="navLB(-1)">&#9664;</button>
-    <button class="nav next" onclick="navLB(1)">&#9654;</button>
-    <img id="lbImg" src="" alt="">
-    <div class="info" id="lbInfo"></div>
+    <div class="img-wrap" id="imgWrap">
+        <img class="lb-img" id="lbImg" src="" alt="" draggable="false">
+    </div>
+    <div class="lb-top">
+        <button class="btn btn-icon" onclick="zoomOut()" title="缩小">−</button>
+        <button class="btn" onclick="zoomReset()" id="zoomLabel">100%</button>
+        <button class="btn btn-icon" onclick="zoomIn()" title="放大">+</button>
+    </div>
+    <button class="btn btn-icon lb-close" onclick="closeLB()">✕</button>
+    <button class="btn btn-icon lb-nav prev" onclick="navLB(-1)">◀</button>
+    <button class="btn btn-icon lb-nav next" onclick="navLB(1)">▶</button>
+    <div class="zoom-label" id="zoomToast"></div>
+    <div class="lb-info" id="lbInfo"></div>
 </div>
 
 <script>
@@ -105,6 +152,11 @@ var filtered = ALL.slice();
 var curIdx = -1;
 var loaded = 0;
 var BATCH = 60;
+
+// Zoom state
+var scale = 1;
+var posX = 0, posY = 0;
+var dragging = false, dragStartX = 0, dragStartY = 0, startPosX = 0, startPosY = 0;
 
 function makeCard(d, idx) {
     var c = document.createElement('div');
@@ -167,31 +219,154 @@ function filter() {
     if (filtered.length > 0) loadMore();
 }
 
+// ---- Lightbox with Zoom & Pan ----
 function openLB(idx) {
     curIdx = idx;
+    scale = 1; posX = 0; posY = 0;
     var d = filtered[idx];
-    document.getElementById('lbImg').src = d.thumb;
+    var img = document.getElementById('lbImg');
+    img.src = d.thumb;
+    applyTransform();
+    document.getElementById('zoomLabel').textContent = '100%';
     document.getElementById('lbInfo').textContent = (idx + 1) + ' / ' + filtered.length + '  ' + d.name;
     document.getElementById('lightbox').classList.add('active');
+    document.body.style.overflow = 'hidden';
 }
 
-function closeLB() { document.getElementById('lightbox').classList.remove('active'); }
+function closeLB() {
+    document.getElementById('lightbox').classList.remove('active');
+    document.body.style.overflow = '';
+    scale = 1; posX = 0; posY = 0;
+}
 
 function navLB(dir) {
     curIdx = (curIdx + dir + filtered.length) % filtered.length;
+    scale = 1; posX = 0; posY = 0;
     var d = filtered[curIdx];
-    document.getElementById('lbImg').src = d.thumb;
+    var img = document.getElementById('lbImg');
+    img.src = d.thumb;
+    applyTransform();
+    document.getElementById('zoomLabel').textContent = '100%';
     document.getElementById('lbInfo').textContent = (curIdx + 1) + ' / ' + filtered.length + '  ' + d.name;
 }
 
-document.addEventListener('keydown', function(e) {
-    if (document.getElementById('lightbox').classList.contains('active')) {
-        if (e.key === 'Escape') closeLB();
-        if (e.key === 'ArrowLeft') navLB(-1);
-        if (e.key === 'ArrowRight') navLB(1);
+function applyTransform() {
+    var img = document.getElementById('lbImg');
+    img.style.transform = 'translate(' + posX + 'px, ' + posY + 'px) scale(' + scale + ')';
+}
+
+function zoomIn() {
+    scale = Math.min(scale + 0.25, 5);
+    applyTransform();
+    showZoom(Math.round(scale * 100) + '%');
+}
+
+function zoomOut() {
+    scale = Math.max(scale - 0.25, 0.25);
+    applyTransform();
+    if (scale <= 1) { posX = 0; posY = 0; applyTransform(); }
+    showZoom(Math.round(scale * 100) + '%');
+}
+
+function zoomReset() {
+    scale = 1; posX = 0; posY = 0;
+    applyTransform();
+    showZoom('100%');
+}
+
+var zoomTimer;
+function showZoom(text) {
+    document.getElementById('zoomLabel').textContent = text;
+    var toast = document.getElementById('zoomToast');
+    toast.textContent = text;
+    toast.classList.add('show');
+    clearTimeout(zoomTimer);
+    zoomTimer = setTimeout(function(){ toast.classList.remove('show'); }, 800);
+}
+
+// Mouse wheel zoom
+document.getElementById('imgWrap').addEventListener('wheel', function(e) {
+    e.preventDefault();
+    if (e.deltaY < 0) zoomIn();
+    else zoomOut();
+}, { passive: false });
+
+// Drag to pan (when zoomed)
+var imgWrap = document.getElementById('imgWrap');
+imgWrap.addEventListener('mousedown', function(e) {
+    if (scale > 1 && e.target.tagName === 'IMG') {
+        dragging = true;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        startPosX = posX;
+        startPosY = posY;
+        document.getElementById('lbImg').classList.add('dragging');
+        e.preventDefault();
     }
 });
 
+window.addEventListener('mousemove', function(e) {
+    if (dragging) {
+        posX = startPosX + (e.clientX - dragStartX);
+        posY = startPosY + (e.clientY - dragStartY);
+        applyTransform();
+    }
+});
+
+window.addEventListener('mouseup', function() {
+    dragging = false;
+    document.getElementById('lbImg').classList.remove('dragging');
+});
+
+// Touch support for mobile
+var touchStartDist = 0, touchStartScale = 1;
+imgWrap.addEventListener('touchstart', function(e) {
+    if (e.touches.length === 2) {
+        touchStartDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        touchStartScale = scale;
+        e.preventDefault();
+    } else if (e.touches.length === 1 && scale > 1) {
+        dragging = true;
+        dragStartX = e.touches[0].clientX;
+        dragStartY = e.touches[0].clientY;
+        startPosX = posX;
+        startPosY = posY;
+        document.getElementById('lbImg').classList.add('dragging');
+    }
+}, { passive: false });
+
+imgWrap.addEventListener('touchmove', function(e) {
+    if (e.touches.length === 2) {
+        var dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        scale = Math.min(5, Math.max(0.25, touchStartScale * (dist / touchStartDist)));
+        applyTransform();
+        showZoom(Math.round(scale * 100) + '%');
+        e.preventDefault();
+    } else if (e.touches.length === 1 && dragging) {
+        posX = startPosX + (e.touches[0].clientX - dragStartX);
+        posY = startPosY + (e.touches[0].clientY - dragStartY);
+        applyTransform();
+    }
+}, { passive: false });
+
+imgWrap.addEventListener('touchend', function() {
+    dragging = false;
+    document.getElementById('lbImg').classList.remove('dragging');
+});
+
+// Keyboard
+document.addEventListener('keydown', function(e) {
+    var lb = document.getElementById('lightbox');
+    if (!lb.classList.contains('active')) return;
+    if (e.key === 'Escape') { closeLB(); return; }
+    if (e.key === 'ArrowLeft') { navLB(-1); return; }
+    if (e.key === 'ArrowRight') { navLB(1); return; }
+    if (e.key === '+' || e.key === '=') { zoomIn(); return; }
+    if (e.key === '-') { zoomOut(); return; }
+    if (e.key === '0') { zoomReset(); return; }
+});
+
+// Infinite scroll
 window.addEventListener('scroll', function() {
     if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 600) loadMore();
 });
